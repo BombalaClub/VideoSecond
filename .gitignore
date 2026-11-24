@@ -1,0 +1,14 @@
+.gradle/
+.idea/
+.DS_Store
+*.iml
+local.properties
+.local-signing/
+.gate-key-*/
+*.keystore
+*.p12
+*.jks
+*.idsig
+**/build/
+dist/
+/ios/

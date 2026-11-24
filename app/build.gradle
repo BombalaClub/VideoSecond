@@ -1,0 +1,38 @@
+plugins {
+    id 'com.android.application'
+}
+
+def familyStore = rootProject.file('.local-signing/family.p12')
+def familyPass = rootProject.file('.local-signing/password')
+
+android {
+    namespace gateApplicationId
+    compileSdk gateCompileSdk.toInteger()
+    buildToolsVersion gateBuildTools
+
+    defaultConfig {
+        applicationId gateApplicationId
+        minSdk gateMinSdk.toInteger()
+        targetSdk gateTargetSdk.toInteger()
+        versionCode gateVersionCode.toInteger()
+        versionName gateVersionName
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    if (familyStore.isFile() && familyPass.isFile()) {
+        signingConfigs {
+            family {
+                storeFile familyStore
+                storePassword familyPass.text.trim()
+                keyAlias 'family'
+                keyPassword familyPass.text.trim()
+                storeType 'PKCS12'
+            }
+        }
+        buildTypes.release.signingConfig = signingConfigs.family
+    }
+}

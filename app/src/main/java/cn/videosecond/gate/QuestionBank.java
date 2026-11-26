@@ -20,6 +20,7 @@ import java.util.Set;
 
 /** The offline IHC grade-three training set, with separate practice and gate draws. */
 final class QuestionBank {
+    static final int QUESTION_COUNT = 100;
     private static final String[] ASSETS = {"olympiad_01.json", "olympiad_02.json", "olympiad_03.json"};
     private static final Random RANDOM = new Random();
     private static List<Question> questions;
@@ -60,7 +61,7 @@ final class QuestionBank {
     }
 
     private static List<Question> load(Context context) {
-        List<Question> result = new ArrayList<>(100);
+        List<Question> result = new ArrayList<>(QUESTION_COUNT);
         try {
             for (String asset : ASSETS) {
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(
@@ -76,32 +77,68 @@ final class QuestionBank {
                     }
                 }
             }
-            if (result.size() != 100) throw new JSONException("Expected 100 IHC questions");
+            if (result.size() != QUESTION_COUNT) throw new JSONException("Expected " + QUESTION_COUNT + " IHC questions");
         } catch (IOException | JSONException ex) {
             throw new IllegalStateException("Unable to read the packaged IHC question bank", ex);
         }
         return result;
     }
 
-    static synchronized Question next(Context context, boolean preview) {
+    private static List<Question> questions(Context context) {
         if (questions == null) questions = load(context);
+        return questions;
+    }
+
+    static synchronized int size(Context context) {
+        return questions(context).size();
+    }
+
+    static synchronized Question forReview(Context context, int id) {
+        if (!QuestionProgress.get(context, id).correct()) return null;
+        return forPendingQuiz(context, id);
+    }
+
+    // Resume only an already-issued quiz from private saved instance state.
+    static synchronized Question forPendingQuiz(Context context, int id) {
+        if (id < 1 || id > QUESTION_COUNT) return null;
+        return questions(context).get(id - 1);
+    }
+
+    static synchronized Question next(Context context, boolean preview) {
+        List<Question> booklet = questions(context);
+        Set<String> solved = QuestionProgress.correctIds(context);
+        List<Question> pool = new ArrayList<>();
+        for (Question q : booklet) {
+            if (!solved.contains(Integer.toString(q.id))) pool.add(q);
+        }
+        boolean allCorrect = pool.isEmpty();
+        if (allCorrect) pool = booklet;
+
         SharedPreferences prefs = context.getSharedPreferences(
                 preview ? "ihc2027_practice" : "ihc2027_gate", Context.MODE_PRIVATE);
         int previous = prefs.getInt("last", 0);
-        Set<String> seen = new HashSet<>(prefs.getStringSet("seen", Collections.emptySet()));
+        // Keep old draw history as exposure only. A later missed review can rejoin
+        // the unfinished pool without resetting the all-correct review rotation.
+        String seenKey = allCorrect ? "review_seen" : "seen";
+        Set<String> seen = new HashSet<>(prefs.getStringSet(seenKey, Collections.emptySet()));
         List<Question> remaining = new ArrayList<>();
-        for (Question q : questions) {
+        for (Question q : pool) {
             if (!seen.contains(Integer.toString(q.id))) remaining.add(q);
         }
         if (remaining.isEmpty()) {
             seen.clear();
-            for (Question q : questions) if (q.id != previous) remaining.add(q);
+            remaining.addAll(pool);
         }
-        // Introduce each mode with a visual reasoning problem from the booklet.
-        Question next = previous == 0 ? questions.get((preview ? 38 : 43) - 1)
-                : remaining.get(RANDOM.nextInt(remaining.size()));
+        if (remaining.size() > 1) remaining.removeIf(q -> q.id == previous);
+        Question next;
+        Question introductory = booklet.get((preview ? 38 : 43) - 1);
+        if (previous == 0 && remaining.contains(introductory)) {
+            next = introductory;
+        } else {
+            next = remaining.get(RANDOM.nextInt(remaining.size()));
+        }
         seen.add(Integer.toString(next.id));
-        prefs.edit().putStringSet("seen", seen).putInt("last", next.id).apply();
+        prefs.edit().putStringSet(seenKey, seen).putInt("last", next.id).apply();
         return next;
     }
 

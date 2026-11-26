@@ -38,10 +38,12 @@ public final class MainActivity extends Activity {
     private static final int MUSTARD = 0xfff4bd65;
     private static final String PREVIEW_KEY = "preview";
     private static final String SUCCESS_KEY = "previewSuccess";
+    private static final String ATTEMPT_KEY = "previewAttempt";
 
     private boolean preview;
     private boolean previewSuccess;
     private boolean receiverRegistered;
+    private QuizView previewQuiz;
     private ScrollView page;
     private int lastStatus = -1;
     private boolean lastInstalled;
@@ -60,7 +62,7 @@ public final class MainActivity extends Activity {
                 View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         if (state != null) previewSuccess = state.getBoolean(SUCCESS_KEY);
         if (state != null && state.getBoolean(PREVIEW_KEY)) {
-            startPreview();
+            startPreview(state.getBundle(ATTEMPT_KEY));
         } else {
             refreshIfNeeded();
         }
@@ -75,10 +77,12 @@ public final class MainActivity extends Activity {
             registerReceiver(statusReceiver, filter);
         }
         receiverRegistered = true;
+        if (previewQuiz != null) previewQuiz.setHostActive(true);
         refreshIfNeeded();
     }
 
     @Override protected void onPause() {
+        if (previewQuiz != null) previewQuiz.setHostActive(false);
         if (receiverRegistered) {
             unregisterReceiver(statusReceiver);
             receiverRegistered = false;
@@ -89,6 +93,7 @@ public final class MainActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle out) {
         out.putBoolean(PREVIEW_KEY, preview);
         out.putBoolean(SUCCESS_KEY, previewSuccess);
+        if (previewQuiz != null) out.putBundle(ATTEMPT_KEY, previewQuiz.saveAttempt());
         super.onSaveInstanceState(out);
     }
 
@@ -129,15 +134,21 @@ public final class MainActivity extends Activity {
     }
 
     private void startPreview() {
+        startPreview(null);
+    }
+
+    private void startPreview(Bundle restored) {
         preview = true;
         previewSuccess = false;
         page = null;
-        setContentView(new QuizView(this, false, true, () -> endPreview(true), () -> endPreview(false)));
+        previewQuiz = new QuizView(this, false, true, () -> endPreview(true), () -> endPreview(false), restored);
+        setContentView(previewQuiz);
     }
 
     private void endPreview(boolean solved) {
         if (!preview) return;
         preview = false;
+        previewQuiz = null;
         previewSuccess = solved;
         refreshIfNeeded();
         if (solved) page.announceForAccessibility("体验完成，答对后就可以使用小红书了。");
@@ -180,7 +191,7 @@ public final class MainActivity extends Activity {
         cover.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout coverType = new LinearLayout(this);
         coverType.setOrientation(LinearLayout.VERTICAL);
-        coverType.addView(label("家庭使用约定", 14, 0xffdae7d4, true));
+        coverType.addView(label("三年级奥数 · 100 题", 14, 0xffdae7d4, true));
         TextView title = label("小红书", 37, PAPER, true);
         title.setIncludeFontPadding(false);
         coverType.addView(title, row(3));
@@ -201,7 +212,11 @@ public final class MainActivity extends Activity {
         TextView headingText = label("答题规则", 21, INK, true);
         if (Build.VERSION.SDK_INT >= 28) headingText.setAccessibilityHeading(true);
         heading.addView(headingText, new LinearLayout.LayoutParams(0, -2, 1));
-        heading.addView(label("三年级奥数 · 100 题", 13, MUTED, false));
+        Button history = action("答题记录", false);
+        history.setTextSize(14);
+        history.setMinHeight(dp(48));
+        history.setOnClickListener(v -> startActivity(new Intent(this, QuestionHistoryActivity.class)));
+        heading.addView(history);
         column.addView(heading, row(26));
         addRule(column, "打开时", "每次打开小红书，先答对一道题。", HomeIllustration.Scene.BOOK);
         addRule(column, "使用中", "每使用 30 分钟，再答对一道题。", HomeIllustration.Scene.CLOCK);

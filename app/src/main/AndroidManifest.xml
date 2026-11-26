@@ -16,6 +16,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".QuestionHistoryActivity"
+            android:label="答题记录"
+            android:exported="false" />
         <service
             android:name=".GateService"
             android:exported="true"

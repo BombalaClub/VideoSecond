@@ -225,6 +225,7 @@ public final class GateService extends AccessibilityService {
                 gate.presence() == SessionGate.Presence.SYSTEM_PANEL;
         if (gate.shouldShowQuestion() || retainUnderPanel) {
             showQuestion();
+            if (question != null) question.quiz.setHostActive(gate.shouldShowQuestion());
         } else {
             detachQuestion();
             // A transient system panel should preserve the student's actual question and answer.
@@ -256,7 +257,6 @@ public final class GateService extends AccessibilityService {
             detachQuestion();
             viewQuestionId = id;
             question = new QuestionWindow(this, id);
-            question.addView(new QuizView(this, gate.isRenewal(), false, () -> answer(id), () -> leave(id)));
         }
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
@@ -294,10 +294,13 @@ public final class GateService extends AccessibilityService {
 
     private final class QuestionWindow extends FrameLayout {
         private final long id;
+        private final QuizView quiz;
         QuestionWindow(Context context, long id) {
             super(context);
             this.id = id;
             setBackgroundColor(0xfffbf7ed);
+            quiz = new QuizView(context, gate.isRenewal(), false, () -> answer(id), () -> leave(id));
+            addView(quiz);
         }
         @Override public boolean dispatchKeyEvent(KeyEvent event) {
             if (event.getKeyCode() == KeyEvent.KEYCODE_BACK) {

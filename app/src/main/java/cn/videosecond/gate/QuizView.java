@@ -8,6 +8,8 @@ import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.os.Bundle;
+import android.os.SystemClock;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -53,6 +55,10 @@ public final class QuizView extends FrameLayout {
     private boolean finished;
     private boolean built;
     private boolean wide;
+    private boolean hostActive = true;
+    private boolean restoreDiagram;
+    private long elapsedMillis;
+    private long activeSince = -1;
 
     private ScrollView scroll;
     private TextView answer;
@@ -62,14 +68,22 @@ public final class QuizView extends FrameLayout {
     private LinearLayout diagramPage;
 
     public QuizView(Context context, boolean renewal, boolean preview, Runnable onCorrect, Runnable onExit) {
+        this(context, renewal, preview, onCorrect, onExit, null);
+    }
+
+    QuizView(Context context, boolean renewal, boolean preview, Runnable onCorrect, Runnable onExit,
+             Bundle restored) {
         super(context);
         this.renewal = renewal;
         this.preview = preview;
         this.onCorrect = onCorrect;
         this.onExit = onExit;
-        question = QuestionBank.next(context, preview);
+        QuestionBank.Question pending = preview && restored != null
+                ? QuestionBank.forPendingQuiz(context, restored.getInt("id")) : null;
+        question = pending == null ? QuestionBank.next(context, preview) : pending;
         entries = new String[question.fieldCount()];
         Arrays.fill(entries, "");
+        if (pending != null) restoreAttempt(restored);
         fieldButtons = new Button[entries.length];
         choiceButtons = new Button[question.options.length];
         diagramId = question.diagram ? getResources().getIdentifier(
@@ -80,6 +94,78 @@ public final class QuizView extends FrameLayout {
         setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
     }
 
+    Bundle saveAttempt() {
+        Bundle state = new Bundle();
+        state.putInt("id", question.id);
+        state.putStringArray("entries", entries.clone());
+        state.putInt("field", currentField);
+        state.putBoolean("replace", replaceOnType);
+        state.putInt("mistakes", mistakes);
+        state.putInt("hint", hintLevel);
+        state.putBoolean("wrong", wrong);
+        state.putBoolean("diagram", diagramPage != null || restoreDiagram);
+        state.putLong("elapsed", elapsedNow());
+        return state;
+    }
+
+    private void restoreAttempt(Bundle state) {
+        String[] previous = state.getStringArray("entries");
+        if (previous == null || previous.length != entries.length) return;
+        for (int i = 0; i < entries.length; i++) {
+            entries[i] = previous[i] == null ? "" : previous[i];
+        }
+        currentField = Math.max(0, Math.min(entries.length - 1, state.getInt("field")));
+        replaceOnType = state.getBoolean("replace");
+        mistakes = state.getInt("mistakes");
+        hintLevel = state.getInt("hint");
+        wrong = state.getBoolean("wrong");
+        restoreDiagram = state.getBoolean("diagram");
+        elapsedMillis = state.getLong("elapsed");
+    }
+
+    void setHostActive(boolean active) {
+        hostActive = active;
+        updateClock();
+    }
+
+    private void updateClock() {
+        if (hostActive && !finished && isAttachedToWindow() && hasWindowFocus()
+                && getWindowVisibility() == VISIBLE && isShown()) {
+            if (activeSince < 0) activeSince = SystemClock.uptimeMillis();
+        } else {
+            pauseClock();
+        }
+    }
+
+    private long elapsedNow() {
+        return activeSince < 0 ? elapsedMillis : elapsedMillis + SystemClock.uptimeMillis() - activeSince;
+    }
+
+    private void pauseClock() {
+        elapsedMillis = elapsedNow();
+        activeSince = -1;
+    }
+
+    @Override protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        updateClock();
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        pauseClock();
+        super.onDetachedFromWindow();
+    }
+
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) updateClock(); else pauseClock();
+    }
+
+    @Override public void onVisibilityAggregated(boolean isVisible) {
+        super.onVisibilityAggregated(isVisible);
+        if (isVisible) updateClock(); else pauseClock();
+    }
+
     @Override protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         int width = MeasureSpec.getSize(widthMeasureSpec);
         int height = MeasureSpec.getSize(heightMeasureSpec);
@@ -87,9 +173,10 @@ public final class QuizView extends FrameLayout {
         if (!built || wide != nextWide) {
             wide = nextWide;
             built = true;
-            boolean restoreDiagram = diagramPage != null;
+            boolean showDiagram = diagramPage != null || restoreDiagram;
             build();
-            if (restoreDiagram) openDiagram();
+            if (showDiagram) openDiagram();
+            restoreDiagram = false;
         }
         scroll.getLayoutParams().width = Math.min(width, dp(wide ? 960 : 536));
         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
@@ -123,7 +210,7 @@ public final class QuizView extends FrameLayout {
         });
         header.addView(exit, new LinearLayout.LayoutParams(WRAP, dp(48)));
         content.addView(header, full());
-        TextView intro = label(preview ? "试做一道题，看看孩子会看到什么。" : renewal ? "休息一下，答对这道题就能继续刷。" : "先做一道题，答对就能去逛逛。", 15, MUTED, false);
+        TextView intro = label(preview ? "试做结果也会记入答题记录。" : renewal ? "休息一下，答对这道题就能继续刷。" : "先做一道题，答对就能去逛逛。", 15, MUTED, false);
         add(content, intro, 8);
 
         LinearLayout work = wide ? row() : column();
@@ -312,14 +399,19 @@ public final class QuizView extends FrameLayout {
     }
 
     private void check() {
-        if (finished || entries[currentField].isEmpty()) return;
+        if (finished || wrong || entries[currentField].isEmpty()) return;
         int blank = nextBlank();
         if (blank >= 0) {
             selectField(blank);
             return;
         }
-        if (question.accepts(entries)) {
+        boolean correct = question.accepts(entries);
+        if (correct) {
             finished = true;
+            pauseClock();
+        }
+        QuestionProgress.record(getContext(), question.id, correct, elapsedNow());
+        if (correct) {
             onCorrect.run();
             return;
         }
@@ -363,7 +455,7 @@ public final class QuizView extends FrameLayout {
             answer.setTypeface(Typeface.DEFAULT, empty ? Typeface.NORMAL : Typeface.BOLD);
             answer.setContentDescription(empty ? "尚未输入答案" : "已输入 " + entries[0] + question.unit);
         }
-        boolean enabled = !entries[currentField].isEmpty();
+        boolean enabled = !wrong && !entries[currentField].isEmpty();
         submit.setEnabled(enabled);
         submit.setAlpha(enabled ? 1f : .55f);
         String action = entries.length > 1 && nextBlank() >= 0 ? "下一空" : "确认";
